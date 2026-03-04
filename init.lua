@@ -218,6 +218,24 @@ vim.keymap.set('n', '<C-S-l>', '<C-w>L', { desc = 'Move window to the right' })
 vim.keymap.set('n', '<C-S-j>', '<C-w>J', { desc = 'Move window to the lower' })
 vim.keymap.set('n', '<C-S-k>', '<C-w>K', { desc = 'Move window to the upper' })
 
+-- Override gx to open GitHub repos from 'user/repo' patterns (e.g. lazy.nvim plugin specs)
+vim.keymap.set('n', 'gx', function()
+  local line = vim.api.nvim_get_current_line()
+  -- 1. Check for quoted 'user/repo' or "user/repo" on the current line
+  local repo = line:match '[\'"]([%w_%-%.]+/[%w_%-%.]+)[\'"]' ---@type string?
+  -- 2. Check if the word under the cursor looks like user/repo
+  if not repo then
+    local cfile = vim.fn.expand '<cfile>'
+    if cfile:match '^[%w_%-%.]+/[%w_%-%.]+$' then repo = cfile end
+  end
+  if repo then
+    vim.ui.open('https://github.com/' .. repo)
+  else
+    -- Fall back to default gx behavior (open URL or file under cursor)
+    vim.ui.open(vim.fn.expand '<cfile>')
+  end
+end, { desc = 'Open GitHub repo or URL under cursor' })
+
 -- [[ Basic Autocommands ]]
 --  See `:help lua-guide-autocommands`
 
