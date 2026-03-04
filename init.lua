@@ -494,6 +494,9 @@ require('lazy').setup({
 
       -- Shortcut for searching your Neovim configuration files
       vim.keymap.set('n', '<leader>sn', function() builtin.find_files { cwd = vim.fn.stdpath 'config' } end, { desc = '[S]earch [N]eovim files' })
+
+      -- SourcePawn symbol search
+      vim.keymap.set('n', '<leader>sp', function() require('custom.sourcepawn_symbols').search_symbols() end, { desc = '[S]earch SourcePawn symbols' })
     end,
   },
 
@@ -968,6 +971,9 @@ require('lazy').setup({
     },
   },
 })
+
+-- Load custom SourcePawn configuration
+require 'custom.sourcepawn'
 
 -- The line beneath this is called `modeline`. See `:help modeline`
 -- vim: ts=2 sts=2 sw=2 et
