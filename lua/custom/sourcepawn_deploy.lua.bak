@@ -1,0 +1,384 @@
+-- SourcePawn Compile & Deploy Module
+-- Cross-platform (macOS / Windows) using vim.system, vim.fs, vim.uv
+
+local M = {}
+
+---@class SourcePawnDeployConfig
+M.cfg = {
+  spcomp = 'spcomp', -- falls back to PATH; auto-detects <root>/scripting/spcomp if present
+  ssh_host = 'dzine',
+  remote_base = '~/Steam/css/cstrike/addons/sourcemod',
+
+  extra_upload_paths = {
+    'translations',
+    'gamedata',
+    'configs',
+  },
+
+  exclude = {
+    '^scripting/',
+    '%.sp$',
+    '^%.git/',
+    '^README%.md$',
+  },
+}
+
+--- Find the sourcemod root by searching upward for a directory named "sourcemod"
+--- whose parent we return (i.e. the directory *containing* "sourcemod/").
+--- Returns the full path to the sourcemod/ directory itself.
+---@param start_path string
+---@return string|nil
+function M.find_sourcemod_root(start_path)
+  local dir = vim.fs.dirname(start_path)
+  while dir do
+    -- Check if this directory is named "sourcemod" and contains scripting/
+    if vim.fn.fnamemodify(dir, ':t') == 'sourcemod' and (vim.uv or vim.loop).fs_stat(dir .. '/scripting') then return dir end
+    local parent = vim.fs.dirname(dir)
+    if parent == dir then break end
+    dir = parent
+  end
+  return nil
+end
+
+--- Check whether a relative path should be excluded from upload.
+---@param rel_path string path relative to sourcemod root
+---@return boolean
+function M.is_excluded(rel_path)
+  for _, pattern in ipairs(M.cfg.exclude) do
+    if rel_path:find(pattern) then return true end
+  end
+  return false
+end
+
+--- Collect files recursively under `base_dir/sub` and return their relative paths (to base_dir).
+---@param base_dir string sourcemod root
+---@param sub string subdirectory name (e.g. "translations")
+---@return string[]
+function M.collect_files(base_dir, sub)
+  local results = {}
+  local full = base_dir .. '/' .. sub
+
+  local stat = (vim.uv or vim.loop).fs_stat(full)
+  if not stat then return results end
+
+  if stat.type == 'file' then
+    local rel = sub
+    if not M.is_excluded(rel) then table.insert(results, rel) end
+    return results
+  end
+
+  -- Recursive directory walk
+  local function walk(dir_path, rel_prefix)
+    local handle = (vim.uv or vim.loop).fs_scandir(dir_path)
+    if not handle then return end
+    while true do
+      local name, typ = (vim.uv or vim.loop).fs_scandir_next(handle)
+      if not name then break end
+      local rel = rel_prefix .. '/' .. name
+      local abs = dir_path .. '/' .. name
+      if typ == 'directory' then
+        walk(abs, rel)
+      else
+        if not M.is_excluded(rel) then table.insert(results, rel) end
+      end
+    end
+  end
+
+  walk(full, sub)
+  return results
+end
+
+--- Log buffer management
+M._log_buf = nil
+M._log_min_height = 6
+M._log_max_ratio = 0.4 -- max fraction of editor height
+
+--- Get or create the log buffer and open it in a bottom split.
+--- Does not change focus — caller's window stays active.
+---@return integer bufnr
+function M.open_log()
+  local prev_win = vim.api.nvim_get_current_win()
+
+  if M._log_buf and vim.api.nvim_buf_is_valid(M._log_buf) then
+    local wins = vim.fn.win_findbuf(M._log_buf)
+    if #wins == 0 then
+      vim.cmd 'botright 12split'
+      vim.api.nvim_win_set_buf(0, M._log_buf)
+    end
+  else
+    vim.cmd 'botright 12new'
+    M._log_buf = vim.api.nvim_get_current_buf()
+    vim.bo[M._log_buf].buftype = 'nofile'
+    vim.bo[M._log_buf].bufhidden = 'hide'
+    vim.bo[M._log_buf].swapfile = false
+    vim.api.nvim_buf_set_name(M._log_buf, '[SourcePawn Log]')
+  end
+
+  -- Restore focus to the original window
+  vim.api.nvim_set_current_win(prev_win)
+  return M._log_buf
+end
+
+--- Resize log window(s) to fit content, clamped between min and max.
+function M.resize_log()
+  local buf = M._log_buf
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
+  local line_count = vim.api.nvim_buf_line_count(buf)
+  local max_height = math.floor(vim.o.lines * M._log_max_ratio)
+  local height = math.max(M._log_min_height, math.min(line_count, max_height))
+  local wins = vim.fn.win_findbuf(buf)
+  for _, w in ipairs(wins) do
+    vim.api.nvim_win_set_height(w, height)
+  end
+end
+
+--- Write lines to the log buffer (clears previous content).
+---@param lines string[]
+function M.log_write(lines)
+  local buf = M.open_log()
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  M.resize_log()
+  local wins = vim.fn.win_findbuf(buf)
+  for _, w in ipairs(wins) do
+    vim.api.nvim_win_set_cursor(w, { #lines, 0 })
+  end
+end
+
+--- Append lines to the log buffer.
+---@param lines string[]
+function M.log_append(lines)
+  local buf = M.open_log()
+  vim.bo[buf].modifiable = true
+  vim.api.nvim_buf_set_lines(buf, -1, -1, false, lines)
+  vim.bo[buf].modifiable = false
+  M.resize_log()
+  local total = vim.api.nvim_buf_line_count(buf)
+  local wins = vim.fn.win_findbuf(buf)
+  for _, w in ipairs(wins) do
+    vim.api.nvim_win_set_cursor(w, { total, 0 })
+  end
+end
+
+--- Run a command via vim.system and return { code, stdout, stderr }.
+---@param cmd string[]
+---@param opts? { cwd?: string }
+---@return { code: integer, stdout: string, stderr: string }
+function M.run(cmd, opts)
+  local result = vim.system(cmd, { text = true, cwd = opts and opts.cwd }):wait()
+  return { code = result.code, stdout = result.stdout or '', stderr = result.stderr or '' }
+end
+
+--- Compile the current .sp file.
+---@param callback? fun(ok: boolean, smx_path: string|nil, root: string|nil)
+function M.compile(callback)
+  local bufname = vim.api.nvim_buf_get_name(0)
+  if not bufname:match '%.sp$' then
+    vim.notify('Current buffer is not a .sp file', vim.log.levels.WARN)
+    if callback then callback(false) end
+    return
+  end
+
+  -- Save first
+  vim.cmd 'silent update'
+
+  local root = M.find_sourcemod_root(bufname)
+  if not root then
+    vim.notify('Could not find sourcemod/ root', vim.log.levels.ERROR)
+    if callback then callback(false) end
+    return
+  end
+
+  local basename = vim.fn.fnamemodify(bufname, ':t:r')
+  local output = root .. '/plugins/' .. basename .. '.smx'
+
+  -- Resolve spcomp: prefer project-local scripting/spcomp, then cfg, then PATH
+  local spcomp = M.cfg.spcomp
+  local local_spcomp = root .. '/scripting/spcomp'
+  if (vim.uv or vim.loop).fs_stat(local_spcomp) then
+    spcomp = local_spcomp
+  end
+
+  -- Build include path flags (-i for each include directory found)
+  local cmd = { spcomp, bufname, '-o', output }
+  local include_dir = root .. '/scripting/include'
+  if (vim.uv or vim.loop).fs_stat(include_dir) then
+    table.insert(cmd, '-i' .. include_dir)
+  end
+
+  local result = M.run(cmd)
+  local full_output = result.stdout .. result.stderr
+
+  -- Show full spcomp output in the log buffer
+  local log_lines = { '── Compile: ' .. basename .. '.sp ──', '' }
+  for line in full_output:gmatch '[^\r\n]+' do
+    table.insert(log_lines, line)
+  end
+  table.insert(log_lines, '')
+
+  if result.code == 0 then
+    table.insert(log_lines, '✓ Compiled ' .. basename .. '.smx')
+    M.log_write(log_lines)
+    if callback then callback(true, output, root) end
+  else
+    table.insert(log_lines, '✗ Compile failed (exit ' .. result.code .. ')')
+    M.log_write(log_lines)
+    if callback then callback(false) end
+  end
+end
+
+--- Parse spcomp output into the quickfix list.
+---@param output string
+---@param root string
+function M.parse_spcomp_output(output, root)
+  local items = {}
+  -- spcomp output: file(line) : warning/error NNN: message
+  for line in output:gmatch '[^\r\n]+' do
+    local file, lnum, kind, msg = line:match '^(.-)%((%d+)%) : (%w+).*: (.+)$'
+    if file and lnum then
+      -- Resolve relative paths against root
+      if not vim.fn.fnamemodify(file, ':p'):find '^/' and not file:match '^%a:' then file = root .. '/' .. file end
+      table.insert(items, {
+        filename = file,
+        lnum = tonumber(lnum),
+        type = kind == 'error' and 'E' or 'W',
+        text = msg,
+      })
+    end
+  end
+  vim.fn.setqflist(items, 'r')
+  if #items > 0 then
+    vim.cmd 'copen'
+  else
+    vim.cmd 'cclose'
+  end
+end
+
+--- Upload a list of relative paths (to sourcemod root) to the remote server.
+---@param root string sourcemod root
+---@param files string[] relative paths to upload
+function M.upload_files(root, files)
+  if #files == 0 then
+    vim.notify('No files to upload', vim.log.levels.WARN)
+    return
+  end
+
+  -- Collect remote directories we need to create
+  local remote_dirs = {}
+  for _, rel in ipairs(files) do
+    local dir = vim.fn.fnamemodify(rel, ':h')
+    if dir ~= '.' then remote_dirs[M.cfg.remote_base .. '/' .. dir] = true end
+  end
+
+  -- Create remote directories in one ssh call
+  if next(remote_dirs) then
+    local mkdir_args = {}
+    for d, _ in pairs(remote_dirs) do
+      table.insert(mkdir_args, d)
+    end
+    local mkdir_cmd = 'mkdir -p ' .. table.concat(mkdir_args, ' ')
+    local res = M.run { 'ssh', M.cfg.ssh_host, mkdir_cmd }
+    if res.code ~= 0 then
+      vim.notify('Failed to create remote dirs:\n' .. res.stderr, vim.log.levels.ERROR)
+      return
+    end
+  end
+
+  -- Upload each file via scp
+  local upload_lines = { '', '── Upload → ' .. M.cfg.ssh_host .. ' ──', '' }
+  local failed = 0
+  for _, rel in ipairs(files) do
+    local local_path = root .. '/' .. rel
+    local remote_path = M.cfg.ssh_host .. ':' .. M.cfg.remote_base .. '/' .. rel
+    local res = M.run { 'scp', local_path, remote_path }
+    if res.code ~= 0 then
+      table.insert(upload_lines, '  ✗ ' .. rel)
+      if res.stderr ~= '' then table.insert(upload_lines, '    ' .. res.stderr:gsub('[\r\n]+$', '')) end
+      failed = failed + 1
+    else
+      table.insert(upload_lines, '  ✓ ' .. rel)
+    end
+  end
+
+  table.insert(upload_lines, '')
+  if failed == 0 then
+    table.insert(upload_lines, string.format('✓ Uploaded %d file(s)', #files))
+  else
+    table.insert(upload_lines, string.format('✗ Upload done with %d failure(s)', failed))
+  end
+
+  M.log_append(upload_lines)
+end
+
+--- Upload only the current buffer's compiled .smx file.
+function M.upload()
+  local bufname = vim.api.nvim_buf_get_name(0)
+  if not bufname:match '%.sp$' then
+    vim.notify('Current buffer is not a .sp file', vim.log.levels.WARN)
+    return
+  end
+
+  local root = M.find_sourcemod_root(bufname)
+  if not root then
+    vim.notify('Could not find sourcemod/ root', vim.log.levels.ERROR)
+    return
+  end
+
+  local basename = vim.fn.fnamemodify(bufname, ':t:r')
+  local smx_rel = 'plugins/' .. basename .. '.smx'
+  local smx_abs = root .. '/' .. smx_rel
+
+  if not (vim.uv or vim.loop).fs_stat(smx_abs) then
+    vim.notify(basename .. '.smx not found — compile first', vim.log.levels.WARN)
+    return
+  end
+
+  M.upload_files(root, { smx_rel })
+end
+
+--- Upload all deployable files (all .smx + extra dirs).
+function M.upload_all()
+  local bufname = vim.api.nvim_buf_get_name(0)
+  local root = M.find_sourcemod_root(bufname)
+  if not root then
+    vim.notify('Could not find sourcemod/ root', vim.log.levels.ERROR)
+    return
+  end
+
+  local files = {}
+
+  -- plugins/*.smx
+  local plugin_files = M.collect_files(root, 'plugins')
+  for _, f in ipairs(plugin_files) do
+    if f:match '%.smx$' then table.insert(files, f) end
+  end
+
+  -- extra directories
+  for _, sub in ipairs(M.cfg.extra_upload_paths) do
+    vim.list_extend(files, M.collect_files(root, sub))
+  end
+
+  -- Deduplicate
+  local seen = {}
+  local unique = {}
+  for _, f in ipairs(files) do
+    if not seen[f] then
+      seen[f] = true
+      table.insert(unique, f)
+    end
+  end
+
+  M.upload_files(root, unique)
+end
+
+--- Compile current .sp then upload just the compiled .smx.
+function M.compile_and_upload()
+  local basename = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':t:r')
+  M.compile(function(ok, _, root)
+    if not ok then return end
+    M.upload_files(root, { 'plugins/' .. basename .. '.smx' })
+  end)
+end
+
+return M
