@@ -1,0 +1,18 @@
+{
+  "lazy_opts": {
+    "prefix": "opts",
+    "body": [
+      "opts = {",
+      "\t$1",
+      "},"
+    ],
+    "description": "opts = {} table for lazy.nvim"
+  },
+  "test_debug": {
+    "prefix": "dbg",
+    "body": [
+      "print(\"DEBUG: \", $1)"
+    ],
+    "description": "A foolproof debug print to test snippets"
+  }
+}
