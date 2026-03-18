@@ -117,6 +117,7 @@ M._log_buf = nil
 M._log_min_height = 6 -- minimum log window height in lines
 M._log_max_ratio = 0.4 -- max log height as fraction of editor (0.4 = 40%)
 M._auto_reload = false -- toggle with <leader>tsr; sends reload after upload
+M._auto_upload = false -- toggle with <leader>tsu; uploads after single compile
 M._compile_on_save = false -- toggle with <leader>tsw; compiles on every :w
 M._project_cfg_cache = {} -- root path -> merged config (cleared by clear_config_cache())
 
@@ -453,7 +454,11 @@ function M.compile(callback)
   if result.code == 0 then
     table.insert(log_lines, '✓ Compiled ' .. basename .. '.smx in ' .. M.elapsed(t0))
     M.log_write(log_lines)
-    if callback then callback(true, output, root) end
+    if callback then
+      callback(true, output, root)
+    elseif M._auto_upload then
+      M.upload_files(root, { cfg.plugins_dir .. '/' .. basename .. '.smx' }, basename)
+    end
   else
     table.insert(log_lines, '✗ Compile failed (exit ' .. result.code .. ')')
     M.log_write(log_lines)
@@ -495,32 +500,54 @@ function M.upload_files(root, files, plugin_name)
     M.log_append { '  ✓ Connected to ' .. M.ssh_display_name(cfg.ssh_host), '' }
   end
 
-  -- Upload files (logged live, one at a time)
+  -- Upload files grouped by remote directory (single scp per directory)
   local t0 = vim.uv.hrtime()
   M.log_append { '── [' .. M.timestamp() .. '] Upload (' .. #files .. ' file(s)) ──', '' }
-  local failed = 0
-  for i, rel in ipairs(files) do
-    local local_path = root .. '/' .. rel
-    local remote_path = cfg.ssh_host .. ':' .. cfg.remote_base .. '/' .. rel
-    local res = M.run { 'scp', local_path, remote_path }
+
+  -- Group files by their remote directory for batched scp
+  local by_dir = {}
+  for _, rel in ipairs(files) do
+    local dir = vim.fn.fnamemodify(rel, ':h')
+    if not by_dir[dir] then by_dir[dir] = {} end
+    table.insert(by_dir[dir], rel)
+  end
+
+  local uploaded, failed = 0, 0
+  for dir, dir_files in pairs(by_dir) do
+    local scp_cmd = { 'scp' }
+    for _, rel in ipairs(dir_files) do
+      table.insert(scp_cmd, root .. '/' .. rel)
+    end
+    table.insert(scp_cmd, cfg.ssh_host .. ':' .. cfg.remote_base .. '/' .. dir .. '/')
+
+    local res = M.run(scp_cmd)
     if res.code ~= 0 then
-      M.log_append { string.format('  [%d/%d] ✗ %s', i, #files, rel) }
+      for _, rel in ipairs(dir_files) do
+        M.log_append { '  ✗ ' .. rel }
+      end
       if res.stderr ~= '' then M.log_append { '    ' .. res.stderr:gsub('[\r\n]+$', '') } end
-      failed = failed + 1
+      failed = failed + #dir_files
     else
-      M.log_append { string.format('  [%d/%d] ✓ %s', i, #files, rel) }
+      for _, rel in ipairs(dir_files) do
+        M.log_append { '  ✓ ' .. rel }
+      end
+      uploaded = uploaded + #dir_files
     end
   end
 
   if failed == 0 then
-    M.log_append { '', string.format('✓ Uploaded %d file(s) in %s', #files, M.elapsed(t0)) }
+    M.log_append { '', string.format('✓ Uploaded %d file(s) in %s', uploaded, M.elapsed(t0)) }
   else
-    M.log_append { '', string.format('✗ Upload done with %d failure(s) in %s', failed, M.elapsed(t0)) }
+    M.log_append { '', string.format('✗ Upload done: %d ok, %d failed in %s', uploaded, failed, M.elapsed(t0)) }
   end
 
   -- Remote reload if enabled
-  if failed == 0 and M._auto_reload and plugin_name then
-    M.reload_plugin(root, plugin_name)
+  if failed == 0 and M._auto_reload then
+    if plugin_name then
+      M.reload_plugin(root, plugin_name)
+    else
+      M.reload_all_plugins(root)
+    end
   end
 end
 
@@ -790,11 +817,45 @@ function M.reload_plugin(root, plugin_name)
   M.log_append(reload_lines)
 end
 
+--- Reload all plugins via tmux (used after upload-all).
+---@param root string
+function M.reload_all_plugins(root)
+  local cfg = M.get_config(root)
+
+  if cfg.tmux_session == '' then
+    M.log_append { '', '⚠ Reload skipped: tmux_session not set in config' }
+    return
+  end
+
+  local reload_cmd = 'sm plugins refresh'
+  local res = M.run {
+    'ssh',
+    cfg.ssh_host,
+    string.format("tmux send-keys -t %s:%s.%s '%s' Enter", cfg.tmux_session, cfg.tmux_window, cfg.tmux_pane, reload_cmd),
+  }
+
+  local reload_lines = { '', '── [' .. M.timestamp() .. '] Reload All ──', '' }
+  if res.code == 0 then
+    table.insert(reload_lines, '✓ Sent: ' .. reload_cmd)
+  else
+    table.insert(reload_lines, '✗ Reload failed')
+    if res.stderr ~= '' then table.insert(reload_lines, '  ' .. res.stderr:gsub('[\r\n]+$', '')) end
+  end
+  M.log_append(reload_lines)
+end
+
 --- Toggle auto-reload after upload.
 function M.toggle_auto_reload()
   M._auto_reload = not M._auto_reload
   local state = M._auto_reload and 'ON' or 'OFF'
   vim.notify('SourceMod auto-reload: ' .. state, vim.log.levels.INFO)
+end
+
+--- Toggle auto-upload after single compile.
+function M.toggle_auto_upload()
+  M._auto_upload = not M._auto_upload
+  local state = M._auto_upload and 'ON' or 'OFF'
+  vim.notify('SourcePawn auto-upload: ' .. state, vim.log.levels.INFO)
 end
 
 --- Toggle compile-on-save for .sp files.
@@ -828,10 +889,15 @@ function M.show_info()
   if (vim.uv or vim.loop).fs_stat(local_spcomp) then spcomp = local_spcomp .. ' (project-local)' end
   table.insert(lines, 'spcomp:      ' .. spcomp)
 
-  -- Includes
+  -- Includes (in priority order)
   local include_dir = root .. '/scripting/include'
   local has_includes = (vim.uv or vim.loop).fs_stat(include_dir) and 'yes' or 'no'
-  table.insert(lines, 'Includes:    ' .. include_dir .. ' (' .. has_includes .. ')')
+  table.insert(lines, 'Includes:')
+  table.insert(lines, '  1. ' .. include_dir .. ' (' .. has_includes .. ')')
+  for i, extra in ipairs(cfg.extra_include_paths) do
+    local exists = (vim.uv or vim.loop).fs_stat(extra) and 'yes' or 'no'
+    table.insert(lines, '  ' .. (i + 1) .. '. ' .. extra .. ' (' .. exists .. ')')
+  end
 
   -- Server
   table.insert(lines, 'SSH host:    ' .. M.ssh_display_name(cfg.ssh_host))
@@ -842,6 +908,7 @@ function M.show_info()
   table.insert(lines, 'Tmux:        ' .. tmux)
 
   -- Toggle states
+  table.insert(lines, 'Auto-upload:     ' .. (M._auto_upload and 'ON' or 'OFF'))
   table.insert(lines, 'Auto-reload:     ' .. (M._auto_reload and 'ON' or 'OFF'))
   table.insert(lines, 'Compile-on-save: ' .. (M._compile_on_save and 'ON' or 'OFF'))
 
@@ -863,6 +930,7 @@ vim.api.nvim_create_user_command('SPDeploy', function() M.compile_and_upload() e
 vim.api.nvim_create_user_command('SPCompileAll', function() M.compile_all() end, { desc = 'SourcePawn: Compile all .sp files' })
 vim.api.nvim_create_user_command('SPDeployAll', function() M.compile_all_and_upload() end, { desc = 'SourcePawn: Compile all + upload all' })
 vim.api.nvim_create_user_command('SPInfo', function() M.show_info() end, { desc = 'SourcePawn: Show deploy info' })
+vim.api.nvim_create_user_command('SPToggleUpload', function() M.toggle_auto_upload() end, { desc = 'SourcePawn: Toggle auto-upload' })
 vim.api.nvim_create_user_command('SPToggleReload', function() M.toggle_auto_reload() end, { desc = 'SourcePawn: Toggle auto-reload' })
 vim.api.nvim_create_user_command('SPToggleCompile', function() M.toggle_compile_on_save() end, { desc = 'SourcePawn: Toggle compile-on-save' })
 vim.api.nvim_create_user_command('SPClearCache', function() M.clear_config_cache() end, { desc = 'SourcePawn: Clear project config cache' })
