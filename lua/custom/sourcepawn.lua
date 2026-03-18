@@ -36,28 +36,47 @@ vim.api.nvim_create_autocmd('User', {
           cmd = { 'sourcepawn-studio' },
           filetypes = { 'sourcepawn' },
           root_dir = function(fname)
-            -- Search upward for common project markers
-            return vim.fs.root(fname, { '.git', 'scripting', 'gamedata', 'translations' }) or vim.fs.dirname(fname) or vim.fn.getcwd()
+            -- Use deploy's root detection for consistency, fall back to project markers
+            return deploy.find_sourcemod_root(fname)
+              or vim.fs.root(fname, { '.git', 'scripting', 'gamedata', 'translations' })
+              or vim.fs.dirname(fname)
+              or vim.fn.getcwd()
           end,
           on_new_config = function(config, root_dir)
+            local cfg = deploy.get_config(root_dir)
             local include_paths = {}
 
-            -- Check for local includes
+            -- Check for local includes (first = highest priority)
             local local_scripting_include = root_dir .. '/scripting/include'
             local local_root_include = root_dir .. '/include'
 
             if vim.fn.isdirectory(local_scripting_include) == 1 then table.insert(include_paths, local_scripting_include) end
             if vim.fn.isdirectory(local_root_include) == 1 then table.insert(include_paths, local_root_include) end
 
+            -- Add extra include paths from .spdeploy.json
+            for _, extra in ipairs(cfg.extra_include_paths) do
+              table.insert(include_paths, extra)
+            end
+
+            -- Resolve spcomp from config (same logic as deploy)
+            local spcomp = cfg.spcomp
+            local local_spcomp = root_dir .. '/scripting/spcomp'
+            local local_spcomp_exe = root_dir .. '/scripting/spcomp.exe'
+            if vim.fn.executable(local_spcomp) == 1 then
+              spcomp = local_spcomp
+            elseif vim.fn.executable(local_spcomp_exe) == 1 then
+              spcomp = local_spcomp_exe
+            end
+
             -- Set the standard config options
             config.init_options = {
               includeDirectories = include_paths,
-              compiler = { path = 'spcomp' },
+              compiler = { path = spcomp },
             }
             config.settings = {
               sourcepawn = {
                 includeDirectories = include_paths,
-                compiler = { path = 'spcomp' },
+                compiler = { path = spcomp },
               },
             }
 
@@ -101,6 +120,7 @@ vim.api.nvim_create_autocmd('FileType', {
     vim.keymap.set('n', '<leader>cA', deploy.compile_all_and_upload, opts 'Compile [A]ll + upload all')
     vim.keymap.set('n', '<leader>cl', deploy.toggle_log, opts 'Toggle [L]og window')
     vim.keymap.set('n', '<leader>ci', deploy.show_info, opts 'Show deploy [I]nfo')
+    vim.keymap.set('n', '<leader>tsu', deploy.toggle_auto_upload, opts '[T]oggle [S]ourcemod [U]pload')
     vim.keymap.set('n', '<leader>tsr', deploy.toggle_auto_reload, opts '[T]oggle [S]ourcemod [R]eload')
     vim.keymap.set('n', '<leader>tsw', deploy.toggle_compile_on_save, opts '[T]oggle compile-on-[S]ave [W]rite')
   end,
