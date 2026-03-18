@@ -92,8 +92,14 @@ M.cfg = {
   spcomp = 'spcomp', -- auto-detects <root>/scripting/spcomp if present
   ssh_host = 'dzine',
   remote_base = '~/Steam/css/cstrike/addons/sourcemod',
-  tmux_session = '', -- remote tmux session name for plugin reload (e.g. "srcds")
+  -- To find tmux targets, run on server:
+  --   tmux list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{window_name} #{pane_current_command}'
+  tmux_session = '', -- remote tmux session name for plugin reload (e.g. "css")
+  tmux_window = '0', -- remote tmux window index (default: first window)
+  tmux_pane = '1', -- remote tmux pane index within window (default: second pane)
 
+  plugins_dir = 'plugins', -- output dir for compiled .smx (relative to sourcemod root, e.g. "plugins/custom")
+  extra_include_paths = {}, -- additional -i paths for spcomp (absolute paths, e.g. "C:/sourcemod/scripting/include")
   extra_upload_paths = {}, -- add dirs here or in .spdeploy.json (e.g. "translations", "gamedata", "configs")
 
   exclude = {
@@ -122,7 +128,11 @@ M._project_cfg_cache = {} -- root path -> merged config (cleared by clear_config
 --   "spcomp": "spcomp",
 --   "ssh_host": "myserver",
 --   "remote_base": "/home/user/server/addons/sourcemod",
---   "tmux_session": "srcds",
+--   "tmux_session": "css",
+--   "tmux_window": "0",
+--   "tmux_pane": "1",
+--   "plugins_dir": "plugins/custom",
+--   "extra_include_paths": ["C:/path/to/other/sourcemod/scripting/include"],
 --   "extra_upload_paths": ["translations", "gamedata", "configs"],
 --   "exclude": ["^scripting/", "\\.sp$", "^\\.git/", "^README\\.md$"]
 -- }
@@ -335,6 +345,18 @@ function M.log_append(lines)
   vim.cmd 'redraw'
 end
 
+-- ── Path helper ─────────────────────────────────────────────────────────────
+
+local _is_win = vim.fn.has 'win32' == 1
+
+--- Normalize a path to use the OS-native separator (backslash on Windows).
+---@param path string
+---@return string
+local function native_path(path)
+  if _is_win then return (path:gsub('/', '\\')) end
+  return path
+end
+
 -- ── Shell helper ───────────────────────────────────────────────────────────
 
 ---@param cmd string[]
@@ -396,19 +418,27 @@ function M.compile(callback)
 
   local cfg = M.get_config(root)
   local basename = vim.fn.fnamemodify(bufname, ':t:r')
-  local plugins_dir = root .. '/plugins'
+  local plugins_dir = root .. '/' .. cfg.plugins_dir
   vim.fn.mkdir(plugins_dir, 'p')
   local output = plugins_dir .. '/' .. basename .. '.smx'
 
   -- Resolve spcomp
   local spcomp = cfg.spcomp
   local local_spcomp = root .. '/scripting/spcomp'
-  if (vim.uv or vim.loop).fs_stat(local_spcomp) then spcomp = local_spcomp end
+  local local_spcomp_exe = root .. '/scripting/spcomp.exe'
+  if (vim.uv or vim.loop).fs_stat(local_spcomp) then
+    spcomp = local_spcomp
+  elseif (vim.uv or vim.loop).fs_stat(local_spcomp_exe) then
+    spcomp = local_spcomp_exe
+  end
 
   -- Build command with include paths
-  local cmd = { spcomp, bufname, '-o', output }
+  local cmd = { spcomp, bufname, '-o', native_path(output) }
   local include_dir = root .. '/scripting/include'
-  if (vim.uv or vim.loop).fs_stat(include_dir) then table.insert(cmd, '-i' .. include_dir) end
+  if (vim.uv or vim.loop).fs_stat(include_dir) then table.insert(cmd, '-i' .. native_path(include_dir)) end
+  for _, extra in ipairs(cfg.extra_include_paths) do
+    table.insert(cmd, '-i' .. native_path(extra))
+  end
 
   local t0 = vim.uv.hrtime()
   local result = M.run(cmd)
@@ -508,8 +538,9 @@ function M.upload()
     return
   end
 
+  local cfg = M.get_config(root)
   local basename = vim.fn.fnamemodify(bufname, ':t:r')
-  local smx_rel = 'plugins/' .. basename .. '.smx'
+  local smx_rel = cfg.plugins_dir .. '/' .. basename .. '.smx'
   local smx_abs = root .. '/' .. smx_rel
 
   if not (vim.uv or vim.loop).fs_stat(smx_abs) then
@@ -536,7 +567,7 @@ function M.upload_all()
   local cfg = M.get_config(root)
   local files = {}
 
-  local plugin_files = M.collect_files(root, 'plugins', cfg)
+  local plugin_files = M.collect_files(root, cfg.plugins_dir, cfg)
   for _, f in ipairs(plugin_files) do
     if f:match '%.smx$' then table.insert(files, f) end
   end
@@ -564,7 +595,8 @@ function M.compile_and_upload()
   local basename = vim.fn.fnamemodify(vim.api.nvim_buf_get_name(0), ':t:r')
   M.compile(function(ok, _, root)
     if not ok then return end
-    M.upload_files(root, { 'plugins/' .. basename .. '.smx' }, basename)
+    local cfg = M.get_config(root)
+    M.upload_files(root, { cfg.plugins_dir .. '/' .. basename .. '.smx' }, basename)
   end)
 end
 
@@ -581,17 +613,25 @@ end
 ---@return string|nil spcomp_version (from first line of output, if present)
 function M.compile_file(sp_path, root, cfg, index, total)
   local basename = vim.fn.fnamemodify(sp_path, ':t:r')
-  local plugins_dir = root .. '/plugins'
+  local plugins_dir = root .. '/' .. cfg.plugins_dir
   vim.fn.mkdir(plugins_dir, 'p')
   local output = plugins_dir .. '/' .. basename .. '.smx'
 
   local spcomp = cfg.spcomp
   local local_spcomp = root .. '/scripting/spcomp'
-  if (vim.uv or vim.loop).fs_stat(local_spcomp) then spcomp = local_spcomp end
+  local local_spcomp_exe = root .. '/scripting/spcomp.exe'
+  if (vim.uv or vim.loop).fs_stat(local_spcomp) then
+    spcomp = local_spcomp
+  elseif (vim.uv or vim.loop).fs_stat(local_spcomp_exe) then
+    spcomp = local_spcomp_exe
+  end
 
-  local cmd = { spcomp, sp_path, '-o', output }
+  local cmd = { spcomp, sp_path, '-o', native_path(output) }
   local include_dir = root .. '/scripting/include'
-  if (vim.uv or vim.loop).fs_stat(include_dir) then table.insert(cmd, '-i' .. include_dir) end
+  if (vim.uv or vim.loop).fs_stat(include_dir) then table.insert(cmd, '-i' .. native_path(include_dir)) end
+  for _, extra in ipairs(cfg.extra_include_paths) do
+    table.insert(cmd, '-i' .. native_path(extra))
+  end
 
   local result = M.run(cmd)
   local full_output = result.stdout .. result.stderr
@@ -693,7 +733,7 @@ function M.compile_all_and_upload()
     local cfg = M.get_config(root)
     local files = {}
 
-    local plugin_files = M.collect_files(root, 'plugins', cfg)
+    local plugin_files = M.collect_files(root, cfg.plugins_dir, cfg)
     for _, f in ipairs(plugin_files) do
       if f:match '%.smx$' then table.insert(files, f) end
     end
@@ -728,11 +768,16 @@ function M.reload_plugin(root, plugin_name)
     return
   end
 
-  local reload_cmd = 'sm plugins reload ' .. plugin_name
+  -- Derive reload name relative to plugins/ (e.g. "plugins/trikzclub" -> "trikzclub/chat")
+  local reload_name = plugin_name
+  local sub = cfg.plugins_dir:match '^plugins/(.+)$'
+  if sub then reload_name = sub .. '/' .. plugin_name end
+
+  local reload_cmd = 'sm plugins reload ' .. reload_name
   local res = M.run {
     'ssh',
     cfg.ssh_host,
-    string.format("tmux send-keys -t %s '%s' Enter", cfg.tmux_session, reload_cmd),
+    string.format("tmux send-keys -t %s:%s.%s '%s' Enter", cfg.tmux_session, cfg.tmux_window, cfg.tmux_pane, reload_cmd),
   }
 
   local reload_lines = { '', '── [' .. M.timestamp() .. '] Reload ──', '' }
@@ -793,7 +838,7 @@ function M.show_info()
   table.insert(lines, 'Remote:      ' .. cfg.remote_base)
 
   -- Tmux
-  local tmux = cfg.tmux_session ~= '' and cfg.tmux_session or '(not set)'
+  local tmux = cfg.tmux_session ~= '' and (cfg.tmux_session .. ':' .. cfg.tmux_window .. '.' .. cfg.tmux_pane) or '(not set)'
   table.insert(lines, 'Tmux:        ' .. tmux)
 
   -- Toggle states
