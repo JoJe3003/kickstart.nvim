@@ -42,7 +42,7 @@ vim.opt.tabstop = 2 -- tabwidth
 vim.opt.shiftwidth = 0 -- indent width (set to same as tabstop)
 vim.opt.softtabstop = -1 -- soft tab stop not tabs on tab/backspace (set to same as tabstop)
 vim.opt.expandtab = true -- use spaces instead of tabs
-vim.opt.smartindent = true -- smart auto-indent
+vim.opt.smartindent = false -- smart auto-indent
 vim.opt.autoindent = true -- copy indent from current line
 
 vim.opt.ignorecase = true -- case insensitive search
@@ -83,7 +83,7 @@ vim.opt.iskeyword:append '-' -- include - in words
 vim.opt.path:append '**' -- include subdirs in search
 vim.opt.selection = 'inclusive' -- include last char in selection
 vim.opt.mouse = 'a' -- enable mouse support
-vim.opt.clipboard:append 'unnamedplus' -- use system clipboard
+-- vim.opt.clipboard:append 'unnamedplus' -- use system clipboard
 vim.opt.modifiable = true -- allow buffer modifications
 vim.opt.encoding = 'utf-8' -- set encoding
 vim.opt.list = true -- Enables whitespace character displaying
@@ -96,6 +96,10 @@ vim.opt.guicursor =
 vim.opt.foldmethod = 'expr' -- use expression for folding
 vim.opt.foldexpr = 'v:lua.vim.treesitter.foldexpr()' -- use treesitter for folding
 vim.opt.foldlevel = 99 -- start with all folds open
+
+-- Set C-style comments as the global default for all unknown files/buffers
+vim.opt.commentstring = '// %s'
+vim.opt.comments = 's1:/**,mb:*,ex:*/,s1:/*,mb:*,ex:*/,://'
 
 vim.opt.splitbelow = true -- horizontal splits go below
 vim.opt.splitright = true -- vertical splits go right
@@ -114,6 +118,13 @@ vim.opt.maxmempattern = 20000 -- increase max memory
 vim.g.mapleader = ' '
 vim.g.maplocalleader = ' '
 
+-- Source the entire current file
+vim.keymap.set('n', '<leader>so', '<cmd>source %<cr>', { desc = '[S]ource [O]pen file' })
+-- Source the current line (Executes as Lua)
+vim.keymap.set('n', '<leader>sl', '<cmd>.lua<cr>', { desc = '[S]ource [L]ine' })
+-- Source the visually selected text (Executes as Lua)
+vim.keymap.set('v', '<leader>sl', '<cmd>lua<cr>', { desc = '[S]ource [L]ines' })
+
 -- better movement in wrapped text
 vim.keymap.set('n', 'j', function() return vim.v.count == 0 and 'gj' or 'j' end, { expr = true, silent = true, desc = 'Down (wrap-aware)' })
 vim.keymap.set('n', 'k', function() return vim.v.count == 0 and 'gk' or 'k' end, { expr = true, silent = true, desc = 'Up (wrap-aware)' })
@@ -124,6 +135,8 @@ vim.keymap.set('n', 'n', 'nzzzv', { desc = 'Next search result (centered)' })
 vim.keymap.set('n', 'N', 'Nzzzv', { desc = 'Previous search result (centered)' })
 vim.keymap.set('n', '<C-d>', '<C-d>zz', { desc = 'Half page down (centered)' })
 vim.keymap.set('n', '<C-u>', '<C-u>zz', { desc = 'Half page up (centered)' })
+vim.keymap.set('n', ']]', ']]zz', { desc = 'Jump to next { (centered)' })
+vim.keymap.set('n', '[[', '[[zz', { desc = 'Jump to previous } (centered)' })
 
 vim.keymap.set({ 'n', 'v' }, '<leader>y', '"+y', { desc = 'Copy to OS clipboard' })
 vim.keymap.set('n', '<leader>Y', '"+Y', { desc = 'Copy line to OS clipboard' })
@@ -171,10 +184,6 @@ vim.keymap.set('n', '<C-Up>', ':resize +2<CR>', { desc = 'Increase window height
 vim.keymap.set('n', '<C-Down>', ':resize -2<CR>', { desc = 'Decrease window height' })
 vim.keymap.set('n', '<C-Left>', ':vertical resize -2<CR>', { desc = 'Decrease window width' })
 vim.keymap.set('n', '<C-Right>', ':vertical resize +2<CR>', { desc = 'Increase window width' })
-
--- NOTE: This won't work in all terminal emulators/tmux/etc. Try your own mapping
--- or just use <C-\><C-n> to exit terminal mode
-vim.keymap.set('t', '<Esc><Esc>', '<C-\\><C-n>', { desc = 'Exit terminal mode' })
 
 -- Override gx to open GitHub repos from 'user/repo' patterns (e.g. lazy.nvim plugin specs)
 vim.keymap.set('n', 'gx', function()
@@ -469,7 +478,7 @@ require('lazy').setup({
       vim.keymap.set('n', '<leader>sh', builtin.help_tags, { desc = '[S]earch [H]elp' })
       vim.keymap.set('n', '<leader>sk', builtin.keymaps, { desc = '[S]earch [K]eymaps' })
       vim.keymap.set('n', '<leader>sf', builtin.find_files, { desc = '[S]earch [F]iles' })
-      vim.keymap.set('n', '<leader>sa', function() builtin.find_files { no_ignore = true, hidden = true } end)
+      vim.keymap.set('n', '<leader>sa', function() builtin.find_files { no_ignore = true, hidden = true } end, { desc = '[S]earch [A]ll files' })
       vim.keymap.set('n', '<leader>ss', builtin.builtin, { desc = '[S]earch [S]elect Telescope' })
       vim.keymap.set({ 'n', 'v' }, '<leader>sw', builtin.grep_string, { desc = '[S]earch current [W]ord' })
       vim.keymap.set('n', '<leader>sg', builtin.live_grep, { desc = '[S]earch by [G]rep' })
@@ -488,39 +497,39 @@ require('lazy').setup({
           local buf = event.buf
 
           -- Find references for the word under your cursor.
-          vim.keymap.set('n', '<leader>gr', builtin.lsp_references, { buffer = buf, desc = '[G]oto [R]eferences' })
+          vim.keymap.set('n', 'gr', builtin.lsp_references, { buffer = buf, desc = '[G]oto [R]eferences' })
 
           -- Jump to the implementation of the word under your cursor.
           -- Useful when your language has ways of declaring types without an actual implementation.
-          vim.keymap.set('n', '<leader>gi', builtin.lsp_implementations, { buffer = buf, desc = '[G]oto [I]mplementation' })
+          vim.keymap.set('n', 'gi', builtin.lsp_implementations, { buffer = buf, desc = '[G]oto [I]mplementation' })
 
           -- Jump to the definition of the word under your cursor.
           -- This is where a variable was first declared, or where a function is defined, etc.
           -- To jump back, press <C-t>.
-          vim.keymap.set('n', '<leader>gd', builtin.lsp_definitions, { buffer = buf, desc = '[G]oto [D]efinition' })
+          vim.keymap.set('n', 'gd', builtin.lsp_definitions, { buffer = buf, desc = '[G]oto [D]efinition' })
 
           -- Fuzzy find all the symbols in your current document.
           -- Symbols are things like variables, functions, types, etc.
-          vim.keymap.set('n', '<leader>gO', builtin.lsp_document_symbols, { buffer = buf, desc = 'Open Document Symbols' })
+          vim.keymap.set('n', 'gS', builtin.lsp_document_symbols, { buffer = buf, desc = '[G]oto Document [S]ymbols' })
 
           -- Fuzzy find all the symbols in your current workspace.
           -- Similar to document symbols, except searches over your entire project.
           vim.keymap.set(
             'n',
-            '<leader>gW',
+            'gW',
             function()
               builtin.lsp_dynamic_workspace_symbols {
                 fname_width = 50,
                 path_display = { 'filename_first' },
               }
             end,
-            { buffer = buf, desc = 'Open Workspace Symbols' }
+            { buffer = buf, desc = '[G]oto [W]orkspace Symbols' }
           )
 
           -- Jump to the type of the word under your cursor.
           -- Useful when you're not sure what type a variable is and you want to see
           -- the definition of its *type*, not where it was *defined*.
-          vim.keymap.set('n', '<leader>gt', builtin.lsp_type_definitions, { buffer = buf, desc = '[G]oto [T]ype Definition' })
+          vim.keymap.set('n', 'gt', builtin.lsp_type_definitions, { buffer = buf, desc = '[G]oto [T]ype Definition' })
 
           vim.keymap.set('n', 'K', function() vim.lsp.buf.hover { border = 'rounded' } end, { buffer = event.buf, desc = 'LSP: Hover Documentation' })
 
@@ -635,11 +644,11 @@ require('lazy').setup({
 
           -- Execute a code action, usually your cursor needs to be on top of an error
           -- or a suggestion from your LSP for this to activate.
-          map('gra', vim.lsp.buf.code_action, '[G]oto Code [A]ction', { 'n', 'x' })
+          map('ga', vim.lsp.buf.code_action, '[G]oto Code [A]ction', { 'n', 'x' })
 
           -- WARN: This is not Goto Definition, this is Goto Declaration.
           --  For example, in C this would take you to the header.
-          map('grD', vim.lsp.buf.declaration, '[G]oto [D]eclaration')
+          map('gD', vim.lsp.buf.declaration, '[G]oto [D]eclaration')
 
           -- The following two autocommands are used to highlight references of the
           -- word under your cursor when your cursor rests there for a little while.
@@ -695,6 +704,7 @@ require('lazy').setup({
         --
         -- But for many setups, the LSP (`ts_ls`) will work just fine
         ts_ls = {},
+        taplo = {}, -- TOML LSP (Alacritty, Cargo.toml, etc.)
 
         stylua = {}, -- Used to format Lua code
 
@@ -781,7 +791,7 @@ require('lazy').setup({
       end,
       formatters_by_ft = {
         lua = { 'stylua' },
-        -- sourcepawn = { 'clang-format' },
+        sourcepawn = { 'clang-format' },
         -- Conform can also run multiple formatters sequentially
         -- python = { "isort", "black" },
         --
@@ -918,6 +928,7 @@ require('lazy').setup({
         styles = {
           comments = { italic = true }, -- Disable italics in comments
         },
+        transparent = true,
       }
 
       -- Load the colorscheme here.
@@ -947,6 +958,47 @@ require('lazy').setup({
     ---@type TodoOptions
     ---@diagnostic disable-next-line: missing-fields
     opts = { signs = false },
+  },
+
+  {
+    'olimorris/codecompanion.nvim',
+    dependencies = {
+      'nvim-lua/plenary.nvim',
+      'nvim-treesitter/nvim-treesitter',
+    },
+    config = function()
+      require('codecompanion').setup {
+        strategies = {
+          chat = {
+            -- Change this to "openai" if you want GPT-4 instead
+            adapter = 'gemini',
+          },
+          inline = {
+            adapter = 'gemini',
+          },
+        },
+        adapters = {
+          gemini = function()
+            return require('codecompanion.adapters').extend('gemini', {
+              env = {
+                api_key = 'GEMINI_API_KEY',
+              },
+            })
+          end,
+          openai = function()
+            return require('codecompanion.adapters').extend('openai', {
+              env = {
+                api_key = 'OPENAI_API_KEY',
+              },
+            })
+          end,
+        },
+      }
+
+      -- Fast keybinds to trigger the AI
+      vim.keymap.set({ 'n', 'v' }, '<leader>aa', '<cmd>CodeCompanionActions<cr>', { desc = 'AI Actions' })
+      vim.keymap.set({ 'n', 'v' }, '<leader>ac', '<cmd>CodeCompanionChat Toggle<cr>', { desc = 'AI Chat' })
+    end,
   },
 
   { -- Collection of various small independent plugins/modules
@@ -991,76 +1043,140 @@ require('lazy').setup({
 
       require('mini.comment').setup()
 
+      -- Custom smart comment textobject using Tree-sitter globally
+      vim.keymap.set({ 'o', 'x' }, 'gc', function()
+        local function select_lines(line_start, line_end)
+          vim.cmd('normal! ' .. line_start .. 'GV' .. line_end .. 'G')
+        end
+
+        local function trim(s)
+          return (s:gsub('^%s+', ''):gsub('%s+$', ''))
+        end
+        local ok, node = pcall(vim.treesitter.get_node)
+        if not ok then node = nil end
+        while node do
+          if node:type():match('comment') then
+            local start_row, start_col, end_row, end_col = node:range()
+            vim.api.nvim_win_set_cursor(0, { start_row + 1, start_col })
+            vim.cmd('normal! v')
+            -- Adjust end position if it spans up to the end of the previous line
+            if end_col == 0 and end_row > start_row then
+              vim.api.nvim_win_set_cursor(0, { end_row, vim.fn.col({ end_row, '$' }) - 1 })
+            else
+              vim.api.nvim_win_set_cursor(0, { end_row + 1, end_col - 1 })
+            end
+            return
+          end
+          node = node:parent()
+        end
+
+        -- Universal fallback when Tree-sitter comment node is unavailable
+        local cur = vim.fn.line '.'
+        local total = vim.api.nvim_buf_line_count(0)
+        local line = vim.fn.getline(cur)
+
+        -- Explicit C-style block fallback (works regardless of current commentstring)
+        do
+          local start_line, end_line
+          for l = cur, 1, -1 do
+            local text = vim.fn.getline(l)
+            if text:find('/%*%*?', 1) then
+              start_line = l
+              break
+            end
+            if text:find('%*/', 1) then break end
+          end
+          if start_line then
+            for l = cur, total do
+              local text = vim.fn.getline(l)
+              if text:find('%*/', 1) then
+                end_line = l
+                break
+              end
+            end
+            if end_line and start_line <= cur and cur <= end_line then
+              select_lines(start_line, end_line)
+              return
+            end
+          end
+        end
+        local cs = vim.bo.commentstring
+        if type(cs) ~= 'string' or cs == '' or not cs:find('%%s') then
+          vim.bo.commentstring = '// %s'
+          cs = vim.bo.commentstring
+        end
+
+        local left, right = cs:match('^(.-)%%s(.-)$')
+        left, right = trim(left or ''), trim(right or '')
+
+        -- Block comments (for styles like /* ... */ or <!-- ... -->)
+        if left ~= '' and right ~= '' then
+          local start_line, end_line
+          for l = cur, 1, -1 do
+            if vim.fn.getline(l):find(left, 1, true) then
+              start_line = l
+              break
+            end
+          end
+          for l = cur, total do
+            if vim.fn.getline(l):find(right, 1, true) then
+              end_line = l
+              break
+            end
+          end
+          if start_line and end_line and start_line <= cur and cur <= end_line then
+            select_lines(start_line, end_line)
+            return
+          end
+        end
+
+        -- Line comments (for styles like //, #, --)
+        local prefixes = {}
+        if left ~= '' and right == '' then table.insert(prefixes, left) end
+        for _, p in ipairs({ '//', '#', '--' }) do
+          if not vim.tbl_contains(prefixes, p) then table.insert(prefixes, p) end
+        end
+        for _, prefix in ipairs(prefixes) do
+          local patt = '^%s*' .. vim.pesc(prefix)
+          if line:find(patt) then
+            local start_line, end_line = cur, cur
+            while start_line > 1 and vim.fn.getline(start_line - 1):find(patt) do
+              start_line = start_line - 1
+            end
+            while end_line < total and vim.fn.getline(end_line + 1):find(patt) do
+              end_line = end_line + 1
+            end
+            select_lines(start_line, end_line)
+            return
+          end
+        end
+
+        -- Final fallback to mini.comment textobject
+        require('mini.comment').textobject()
+      end, { desc = 'Smart comment textobject' })
+
       require('mini.move').setup()
 
-      require('mini.files').setup()
-
-      local animate = require 'mini.animate'
-      animate.setup {
-        -- Cursor: Blazing fast (50ms) so it never trails behind your keystrokes
-        cursor = {
-          enabled = false,
-          timing = animate.gen_timing.linear { duration = 50, unit = 'total' },
+      require('mini.files').setup {
+        mappings = {
+          synchronize = 's', -- Changes '=' to 's' for applying changes
         },
 
-        -- Scroll: Slightly longer (100ms) so you don't get motion sickness,
-        -- but still twice as fast as the default.
-        scroll = {
-          timing = animate.gen_timing.linear { duration = 100, unit = 'total' },
-          subscroll = animate.gen_subscroll.equal {
-            -- Only animate if you are scrolling more than 1 line at a time
-            predicate = function(total_scroll) return total_scroll > 1 end,
-          },
-        },
-
-        -- Window Resize: 50ms makes creating and resizing splits feel instantly responsive
-        resize = {
-          timing = animate.gen_timing.linear { duration = 50, unit = 'total' },
-        },
-
-        -- Window Open/Close: Quick 50ms pop-in for floating windows (like LSP hovers)
-        open = {
-          timing = animate.gen_timing.linear { duration = 50, unit = 'total' },
-        },
-        close = {
-          timing = animate.gen_timing.linear { duration = 50, unit = 'total' },
+        -- UI and Windows
+        windows = {
+          preview = true, -- Enables the file/directory preview
+          width_focus = 30, -- Width of the main focus window
+          width_preview = 30, -- Width of the preview window
         },
       }
 
-      local minifiles_start_path = nil
-
-      local function minifiles_open_at(path)
-        minifiles_start_path = path
-        MiniFiles.open(path, false)
-      end
-
-      vim.keymap.set('n', '-', function()
-        if vim.bo.filetype == 'minifiles' then
-          if minifiles_start_path then
-            MiniFiles.close()
-            MiniFiles.open(minifiles_start_path, false)
-          end
-          return
-        end
-
-        local path = vim.api.nvim_buf_get_name(0)
-        if path == '' then path = vim.uv.cwd() or vim.fn.getcwd() end
-
-        minifiles_open_at(path)
-      end, { desc = 'Mini files (reset to current file)' })
-
-      vim.keymap.set('n', '_', function()
-        local cwd = vim.uv.cwd()
-
-        if vim.bo.filetype == 'minifiles' then
-          minifiles_start_path = cwd
-          MiniFiles.close()
-          MiniFiles.open(cwd, false)
-          return
-        end
-
-        minifiles_open_at(cwd)
-      end, { desc = 'Mini files (reset to cwd)' })
+      -- Open mini.files at the directory of the current file
+      vim.keymap.set(
+        'n',
+        '<leader>e',
+        function() require('mini.files').open(vim.api.nvim_buf_get_name(0), true) end,
+        { desc = 'Open mini.files (Directory of Current File)' }
+      )
 
       -- ... and there is more!
       --  Check out: https://github.com/nvim-mini/mini.nvim
@@ -1076,7 +1192,7 @@ require('lazy').setup({
     branch = 'main',
     -- [[ Configure Treesitter ]] See `:help nvim-treesitter-intro`
     config = function()
-      local parsers = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc', 'sourcepawn' }
+      local parsers = { 'bash', 'c', 'diff', 'html', 'lua', 'luadoc', 'markdown', 'markdown_inline', 'query', 'vim', 'vimdoc', 'sourcepawn', 'toml' }
       require('nvim-treesitter').install(parsers)
       vim.api.nvim_create_autocmd('FileType', {
         callback = function(args)
@@ -1095,8 +1211,9 @@ require('lazy').setup({
           -- vim.wo.foldexpr = 'v:lua.vim.treesitter.foldexpr()'
           -- vim.wo.foldmethod = 'expr'
 
-          -- enables treesitter based indentation
-          vim.bo.indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()"
+          -- enables treesitter based indentation (only if indent queries exist for the language)
+          local ok, query = pcall(vim.treesitter.query.get, language, 'indents')
+          if ok and query then vim.bo.indentexpr = "v:lua.require'nvim-treesitter'.indentexpr()" end
         end,
       })
     end,
@@ -1154,42 +1271,33 @@ require 'custom.sourcepawn'
 -- ============================================================================
 -- FLOATING TERMINAL
 -- ============================================================================
-vim.api.nvim_create_autocmd('TermClose', {
-  group = augroup,
-  callback = function()
-    if vim.v.event.status == 0 then vim.api.nvim_buf_delete(0, {}) end
-  end,
-})
+local state = {
+  buf = -1,
+  win = -1,
+}
 
-vim.api.nvim_create_autocmd('TermOpen', {
-  group = augroup,
-  callback = function()
-    vim.opt_local.number = false
-    vim.opt_local.relativenumber = false
-    vim.opt_local.signcolumn = 'no'
-  end,
-})
-
-local terminal_state = { buf = nil, win = nil, is_open = false }
-
-local function FloatingTerminal()
-  if terminal_state.is_open and terminal_state.win and vim.api.nvim_win_is_valid(terminal_state.win) then
-    vim.api.nvim_win_close(terminal_state.win, false)
-    terminal_state.is_open = false
+local function toggle_terminal()
+  -- 1. If window is valid and open, hide it (Persistence: don't kill the buffer)
+  if vim.api.nvim_win_is_valid(state.win) then
+    vim.api.nvim_win_close(state.win, false)
     return
   end
 
-  if not terminal_state.buf or not vim.api.nvim_buf_is_valid(terminal_state.buf) then
-    terminal_state.buf = vim.api.nvim_create_buf(false, true)
-    vim.bo[terminal_state.buf].bufhidden = 'hide'
+  -- 2. Create buffer if it doesn't exist or was deleted
+  if not vim.api.nvim_buf_is_valid(state.buf) then
+    state.buf = vim.api.nvim_create_buf(false, true)
+    -- Ensure the buffer doesn't show up in your tabline/buffer list
+    vim.bo[state.buf].buflisted = false
   end
 
+  -- 3. Dynamic Centering (Calculates based on current screen size)
   local width = math.floor(vim.o.columns * 0.8)
   local height = math.floor(vim.o.lines * 0.8)
   local row = math.floor((vim.o.lines - height) / 2)
   local col = math.floor((vim.o.columns - width) / 2)
 
-  terminal_state.win = vim.api.nvim_open_win(terminal_state.buf, true, {
+  -- 4. Open Window with Tokyo Night-friendly config
+  state.win = vim.api.nvim_open_win(state.buf, true, {
     relative = 'editor',
     width = width,
     height = height,
@@ -1199,40 +1307,84 @@ local function FloatingTerminal()
     border = 'rounded',
   })
 
-  vim.wo[terminal_state.win].winblend = 0
-  vim.wo[terminal_state.win].winhighlight = 'Normal:FloatingTermNormal,FloatBorder:FloatingTermBorder'
-  vim.api.nvim_set_hl(0, 'FloatingTermNormal', { bg = 'none' })
-  vim.api.nvim_set_hl(0, 'FloatingTermBorder', { bg = 'none' })
+  -- Setting highlights to 'none' respects your Alacritty/Tokyo Night transparency
+  vim.wo[state.win].winhighlight = 'Normal:NormalFloat,FloatBorder:FloatBorder'
 
-  local has_terminal = false
-  local lines = vim.api.nvim_buf_get_lines(terminal_state.buf, 0, -1, false)
-  for _, line in ipairs(lines) do
-    if line ~= '' then
-      has_terminal = true
-      break
-    end
+  -- 5. Initialize Terminal Process (Only if it's a fresh buffer)
+  if vim.bo[state.buf].buftype ~= 'terminal' then
+    local shell = os.getenv 'SHELL'
+    if not shell or shell == '' then shell = vim.fn.has 'win32' == 1 and 'pwsh.exe' or 'sh' end
+    -- Modern replacement for termopen()
+    vim.cmd.terminal(shell)
   end
-  if not has_terminal then vim.fn.termopen(os.getenv 'SHELL') end
 
-  terminal_state.is_open = true
+  -- 6. Instant Insert Mode
   vim.cmd 'startinsert'
-
-  vim.api.nvim_create_autocmd('BufLeave', {
-    buffer = terminal_state.buf,
-    callback = function()
-      if terminal_state.is_open and terminal_state.win and vim.api.nvim_win_is_valid(terminal_state.win) then
-        vim.api.nvim_win_close(terminal_state.win, false)
-        terminal_state.is_open = false
-      end
-    end,
-    once = true,
-  })
 end
 
-vim.keymap.set('n', '<leader>.', FloatingTerminal, { noremap = true, silent = true, desc = 'Toggle floating terminal' })
-vim.keymap.set('t', '<Esc>', function()
-  if terminal_state.is_open and terminal_state.win and vim.api.nvim_win_is_valid(terminal_state.win) then
-    vim.api.nvim_win_close(terminal_state.win, false)
-    terminal_state.is_open = false
+-- Normal Mode: Toggle terminal
+vim.keymap.set('n', '<leader>.', toggle_terminal, { desc = 'Toggle Terminal' })
+
+-- Terminal Mode: The "Smart Escape"
+-- 1. Double Esc to completely hide the terminal window
+vim.keymap.set('t', '<Esc><Esc>', function()
+  if vim.api.nvim_win_is_valid(state.win) then vim.api.nvim_win_close(state.win, false) end
+end, { desc = 'Hide terminal' })
+
+-- 2. Single Ctrl+Esc to just exit terminal mode (to scroll or copy text)
+-- Standard <Esc> is often needed for CLI tools (like fzf or top),
+-- so we don't map a single <Esc> to 'close'.
+vim.keymap.set('t', '<C-Esc>', [[<C-\><C-n>]], { desc = 'Enter Normal Mode in Terminal' })
+
+local term_group = vim.api.nvim_create_augroup('FloatingTermHooks', { clear = true })
+
+vim.api.nvim_create_autocmd('TermOpen', {
+  group = term_group,
+  callback = function()
+    vim.opt_local.number = false
+    vim.opt_local.relativenumber = false
+    vim.opt_local.signcolumn = 'no'
+    vim.opt_local.foldcolumn = '0'
+  end,
+})
+
+-- ============================================================================
+-- PERSISTENT INSTANT LAZYGIT
+-- ============================================================================
+
+local lg_state = { buf = -1, win = -1 }
+
+local function toggle_lazygit()
+  if vim.api.nvim_win_is_valid(lg_state.win) then
+    vim.api.nvim_win_close(lg_state.win, false)
+    return
   end
-end, { noremap = true, silent = true, desc = 'Close floating terminal' })
+
+  if not vim.api.nvim_buf_is_valid(lg_state.buf) then lg_state.buf = vim.api.nvim_create_buf(false, true) end
+
+  local width = math.floor(vim.o.columns * 0.9)
+  local height = math.floor(vim.o.lines * 0.9)
+  lg_state.win = vim.api.nvim_open_win(lg_state.buf, true, {
+    relative = 'editor',
+    width = width,
+    height = height,
+    row = math.floor((vim.o.lines - height) / 2),
+    col = math.floor((vim.o.columns - width) / 2),
+    style = 'minimal',
+    border = 'rounded',
+  })
+
+  if vim.bo[lg_state.buf].buftype ~= 'terminal' then
+    vim.cmd.terminal 'lazygit'
+
+    vim.schedule(function()
+      vim.keymap.set('t', 'q', function()
+        if vim.api.nvim_win_is_valid(lg_state.win) then vim.api.nvim_win_close(lg_state.win, false) end
+      end, { buffer = lg_state.buf, desc = 'Hide Lazygit instead of quitting' })
+    end)
+  end
+
+  vim.cmd 'startinsert'
+end
+
+vim.keymap.set('n', '<leader>l', toggle_lazygit, { desc = 'Toggle Instant Lazygit' })
