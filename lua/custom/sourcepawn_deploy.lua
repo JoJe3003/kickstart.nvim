@@ -85,6 +85,22 @@
 
 local M = {}
 
+--- Wrap a function so it runs inside a coroutine (non-blocking).
+---@param fn function
+---@return function
+local function async(fn)
+  return function(...)
+    local args = { ... }
+    local co = coroutine.create(function()
+      fn(unpack(args))
+    end)
+    local ok, err = coroutine.resume(co)
+    if not ok then vim.notify('sourcepawn async error: ' .. tostring(err), vim.log.levels.ERROR) end
+  end
+end
+
+M.async = async
+
 -- ── Default config (overridden per-project by .spdeploy.json) ──────────────
 
 ---@class SourcePawnDeployConfig
@@ -114,11 +130,44 @@ M.cfg = {
 -- These are session-only (reset on Neovim restart).
 
 M._log_buf = nil
-M._log_min_height = 6 -- minimum log window height in lines
-M._log_max_ratio = 0.4 -- max log height as fraction of editor (0.4 = 40%)
+M._log_max_lines = 12 -- max log height in lines
 M._auto_reload = false -- toggle with <leader>tsr; sends reload after upload
 M._auto_upload = false -- toggle with <leader>tsu; uploads after single compile
 M._compile_on_save = false -- toggle with <leader>tsw; compiles on every :w
+
+-- ── Toggle state persistence ────────────────────────────────────────────────
+
+local _state_path = vim.fn.stdpath 'data' .. '/sourcepawn_toggles.json'
+
+--- Save current toggle states to disk.
+local function save_toggles()
+  local data = vim.json.encode {
+    auto_reload = M._auto_reload,
+    auto_upload = M._auto_upload,
+    compile_on_save = M._compile_on_save,
+  }
+  local f = io.open(_state_path, 'w')
+  if f then
+    f:write(data)
+    f:close()
+  end
+end
+
+--- Load toggle states from disk (called once at module load).
+local function load_toggles()
+  local f = io.open(_state_path, 'r')
+  if not f then return end
+  local content = f:read '*a'
+  f:close()
+  local ok, state = pcall(vim.json.decode, content)
+  if ok and type(state) == 'table' then
+    if type(state.auto_reload) == 'boolean' then M._auto_reload = state.auto_reload end
+    if type(state.auto_upload) == 'boolean' then M._auto_upload = state.auto_upload end
+    if type(state.compile_on_save) == 'boolean' then M._compile_on_save = state.compile_on_save end
+  end
+end
+
+load_toggles()
 M._project_cfg_cache = {} -- root path -> merged config (cleared by clear_config_cache())
 
 -- ── Per-project config (.spdeploy.json) ────────────────────────────────────
@@ -284,7 +333,23 @@ function M.open_log()
     vim.bo[M._log_buf].buftype = 'nofile'
     vim.bo[M._log_buf].bufhidden = 'hide'
     vim.bo[M._log_buf].swapfile = false
+    vim.bo[M._log_buf].buflisted = false -- Hide from bufferline/buffer list
     vim.api.nvim_buf_set_name(M._log_buf, '[SourcePawn Log]')
+
+    -- Map <leader>cl inside the log buffer to close/toggle it
+    vim.keymap.set('n', '<leader>cl', function()
+      local wins = vim.fn.win_findbuf(M._log_buf)
+      for _, w in ipairs(wins) do
+        vim.api.nvim_win_close(w, false)
+      end
+    end, { buffer = M._log_buf, desc = 'Close SourcePawn Log' })
+    -- Also allow 'q' to close it quickly
+    vim.keymap.set('n', 'q', function()
+      local wins = vim.fn.win_findbuf(M._log_buf)
+      for _, w in ipairs(wins) do
+        vim.api.nvim_win_close(w, false)
+      end
+    end, { buffer = M._log_buf, desc = 'Close SourcePawn Log' })
   end
 
   vim.api.nvim_set_current_win(prev_win)
@@ -305,12 +370,55 @@ function M.toggle_log()
   M.open_log()
 end
 
+-- ── Log highlights ──────────────────────────────────────────────────────────
+
+M._log_ns = vim.api.nvim_create_namespace 'sourcepawn_log'
+
+vim.api.nvim_set_hl(0, 'SPLogHeader', { link = 'Title' })
+vim.api.nvim_set_hl(0, 'SPLogSuccess', { link = 'DiagnosticOk' })
+vim.api.nvim_set_hl(0, 'SPLogError', { link = 'DiagnosticError' })
+vim.api.nvim_set_hl(0, 'SPLogWarning', { link = 'DiagnosticWarn' })
+vim.api.nvim_set_hl(0, 'SPLogMuted', { link = 'Comment' })
+
+--- Apply syntax highlights to all lines in the log buffer.
+---@param buf integer
+local function highlight_log(buf)
+  vim.api.nvim_buf_clear_namespace(buf, M._log_ns, 0, -1)
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  for i, line in ipairs(lines) do
+    local lnum = i - 1
+    local hl
+    if line:match '^──' then
+      hl = 'SPLogHeader'
+    elseif line:match '✓' then
+      hl = 'SPLogSuccess'
+    elseif line:match '✗' then
+      hl = 'SPLogError'
+    elseif line:match '⚠' then
+      hl = 'SPLogWarning'
+    elseif line:match '^spcomp:' then
+      hl = 'SPLogMuted'
+    end
+    if hl then
+      vim.api.nvim_buf_set_extmark(buf, M._log_ns, lnum, 0, {
+        end_col = #line,
+        hl_group = hl,
+      })
+    end
+  end
+end
+
 function M.resize_log()
   local buf = M._log_buf
   if not buf or not vim.api.nvim_buf_is_valid(buf) then return end
   local line_count = vim.api.nvim_buf_line_count(buf)
-  local max_height = math.floor(vim.o.lines * M._log_max_ratio)
-  local height = math.max(M._log_min_height, math.min(line_count, max_height))
+  
+  -- Remove trailing empty lines from calculating height so it shrinks to exact content
+  while line_count > 1 and vim.api.nvim_buf_get_lines(buf, line_count - 1, line_count, false)[1] == '' do
+    line_count = line_count - 1
+  end
+  
+  local height = math.max(1, math.min(line_count, M._log_max_lines))
   local wins = vim.fn.win_findbuf(buf)
   for _, w in ipairs(wins) do
     vim.api.nvim_win_set_height(w, height)
@@ -323,6 +431,7 @@ function M.log_write(lines)
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].modifiable = false
+  highlight_log(buf)
   M.resize_log()
   local wins = vim.fn.win_findbuf(buf)
   for _, w in ipairs(wins) do
@@ -337,6 +446,7 @@ function M.log_append(lines)
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, -1, -1, false, lines)
   vim.bo[buf].modifiable = false
+  highlight_log(buf)
   M.resize_log()
   local total = vim.api.nvim_buf_line_count(buf)
   local wins = vim.fn.win_findbuf(buf)
@@ -364,8 +474,20 @@ end
 ---@param opts? { cwd?: string }
 ---@return { code: integer, stdout: string, stderr: string }
 function M.run(cmd, opts)
-  local result = vim.system(cmd, { text = true, cwd = opts and opts.cwd }):wait()
-  return { code = result.code, stdout = result.stdout or '', stderr = result.stderr or '' }
+  local co = coroutine.running()
+  if co then
+    -- Async: yield the coroutine and resume when the process finishes
+    vim.system(cmd, { text = true, cwd = opts and opts.cwd }, function(obj)
+      vim.schedule(function()
+        coroutine.resume(co, { code = obj.code, stdout = obj.stdout or '', stderr = obj.stderr or '' })
+      end)
+    end)
+    return coroutine.yield()
+  else
+    -- Sync fallback (outside a coroutine)
+    local result = vim.system(cmd, { text = true, cwd = opts and opts.cwd }):wait()
+    return { code = result.code, stdout = result.stdout or '', stderr = result.stderr or '' }
+  end
 end
 
 -- ── SSH display name ──────────────────────────────────────────────────────
@@ -494,15 +616,15 @@ function M.upload_files(root, files, plugin_name)
     local mkdir_cmd = 'mkdir -p ' .. table.concat(mkdir_args, ' ')
     local res = M.run { 'ssh', cfg.ssh_host, mkdir_cmd }
     if res.code ~= 0 then
-      M.log_append { '  ✗ Connection failed: ' .. res.stderr:gsub('[\r\n]+$', ''), '' }
+      M.log_append { '', '✗ Connection failed: ' .. res.stderr:gsub('[\r\n]+$', '') }
       return
     end
-    M.log_append { '  ✓ Connected to ' .. M.ssh_display_name(cfg.ssh_host), '' }
+    M.log_append { '', '✓ Connected to ' .. M.ssh_display_name(cfg.ssh_host) }
   end
 
   -- Upload files grouped by remote directory (single scp per directory)
   local t0 = vim.uv.hrtime()
-  M.log_append { '── [' .. M.timestamp() .. '] Upload (' .. #files .. ' file(s)) ──', '' }
+  M.log_append { '', '── [' .. M.timestamp() .. '] Upload (' .. #files .. ' file(s)) ──', '' }
 
   -- Group files by their remote directory for batched scp
   local by_dir = {}
@@ -523,13 +645,13 @@ function M.upload_files(root, files, plugin_name)
     local res = M.run(scp_cmd)
     if res.code ~= 0 then
       for _, rel in ipairs(dir_files) do
-        M.log_append { '  ✗ ' .. rel }
+        M.log_append { '✗ ' .. rel }
       end
-      if res.stderr ~= '' then M.log_append { '    ' .. res.stderr:gsub('[\r\n]+$', '') } end
+      if res.stderr ~= '' then M.log_append { '  ' .. res.stderr:gsub('[\r\n]+$', '') } end
       failed = failed + #dir_files
     else
       for _, rel in ipairs(dir_files) do
-        M.log_append { '  ✓ ' .. rel }
+        M.log_append { '✓ ' .. rel }
       end
       uploaded = uploaded + #dir_files
     end
@@ -847,6 +969,7 @@ end
 --- Toggle auto-reload after upload.
 function M.toggle_auto_reload()
   M._auto_reload = not M._auto_reload
+  save_toggles()
   local state = M._auto_reload and 'ON' or 'OFF'
   vim.notify('SourceMod auto-reload: ' .. state, vim.log.levels.INFO)
 end
@@ -854,6 +977,7 @@ end
 --- Toggle auto-upload after single compile.
 function M.toggle_auto_upload()
   M._auto_upload = not M._auto_upload
+  save_toggles()
   local state = M._auto_upload and 'ON' or 'OFF'
   vim.notify('SourcePawn auto-upload: ' .. state, vim.log.levels.INFO)
 end
@@ -861,6 +985,7 @@ end
 --- Toggle compile-on-save for .sp files.
 function M.toggle_compile_on_save()
   M._compile_on_save = not M._compile_on_save
+  save_toggles()
   local state = M._compile_on_save and 'ON' or 'OFF'
   vim.notify('SourcePawn compile-on-save: ' .. state, vim.log.levels.INFO)
 end
@@ -923,13 +1048,13 @@ end
 
 -- ── User commands ──────────────────────────────────────────────────────────
 
-vim.api.nvim_create_user_command('SPCompile', function() M.compile() end, { desc = 'SourcePawn: Compile current .sp' })
-vim.api.nvim_create_user_command('SPUpload', function() M.upload() end, { desc = 'SourcePawn: Upload current .smx' })
-vim.api.nvim_create_user_command('SPUploadAll', function() M.upload_all() end, { desc = 'SourcePawn: Upload all deployable files' })
-vim.api.nvim_create_user_command('SPDeploy', function() M.compile_and_upload() end, { desc = 'SourcePawn: Compile + upload' })
-vim.api.nvim_create_user_command('SPCompileAll', function() M.compile_all() end, { desc = 'SourcePawn: Compile all .sp files' })
-vim.api.nvim_create_user_command('SPDeployAll', function() M.compile_all_and_upload() end, { desc = 'SourcePawn: Compile all + upload all' })
-vim.api.nvim_create_user_command('SPInfo', function() M.show_info() end, { desc = 'SourcePawn: Show deploy info' })
+vim.api.nvim_create_user_command('SPCompile', async(function() M.compile() end), { desc = 'SourcePawn: Compile current .sp' })
+vim.api.nvim_create_user_command('SPUpload', async(function() M.upload() end), { desc = 'SourcePawn: Upload current .smx' })
+vim.api.nvim_create_user_command('SPUploadAll', async(function() M.upload_all() end), { desc = 'SourcePawn: Upload all deployable files' })
+vim.api.nvim_create_user_command('SPDeploy', async(function() M.compile_and_upload() end), { desc = 'SourcePawn: Compile + upload' })
+vim.api.nvim_create_user_command('SPCompileAll', async(function() M.compile_all() end), { desc = 'SourcePawn: Compile all .sp files' })
+vim.api.nvim_create_user_command('SPDeployAll', async(function() M.compile_all_and_upload() end), { desc = 'SourcePawn: Compile all + upload all' })
+vim.api.nvim_create_user_command('SPInfo', async(function() M.show_info() end), { desc = 'SourcePawn: Show deploy info' })
 vim.api.nvim_create_user_command('SPToggleUpload', function() M.toggle_auto_upload() end, { desc = 'SourcePawn: Toggle auto-upload' })
 vim.api.nvim_create_user_command('SPToggleReload', function() M.toggle_auto_reload() end, { desc = 'SourcePawn: Toggle auto-reload' })
 vim.api.nvim_create_user_command('SPToggleCompile', function() M.toggle_compile_on_save() end, { desc = 'SourcePawn: Toggle compile-on-save' })
