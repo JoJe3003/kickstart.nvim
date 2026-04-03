@@ -1360,7 +1360,12 @@ local function toggle_lazygit()
     return
   end
 
-  if not vim.api.nvim_buf_is_valid(lg_state.buf) then lg_state.buf = vim.api.nvim_create_buf(false, true) end
+  if not vim.api.nvim_buf_is_valid(lg_state.buf) then
+    lg_state.buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[lg_state.buf].buflisted = false
+    vim.bo[lg_state.buf].bufhidden = 'hide'
+    vim.bo[lg_state.buf].swapfile = false
+  end
 
   local width = math.floor(vim.o.columns * 0.9)
   local height = math.floor(vim.o.lines * 0.9)
@@ -1376,6 +1381,8 @@ local function toggle_lazygit()
 
   if vim.bo[lg_state.buf].buftype ~= 'terminal' then
     vim.cmd.terminal 'lazygit'
+    vim.bo[lg_state.buf].buflisted = false
+    vim.bo[lg_state.buf].bufhidden = 'hide'
 
     vim.schedule(function()
       vim.keymap.set('t', 'q', function()
