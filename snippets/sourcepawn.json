@@ -1,0 +1,56 @@
+{
+  "view_as": {
+    "prefix": "view_as",
+    "body": [
+      "view_as<${1:type}>(${2:value})"
+    ],
+    "description": "view_as<type>(value) cast"
+  },
+  "regcmd": {
+    "prefix": "regcmd",
+    "body": [
+      "RegConsoleCmd(\"sm_${1:name}\", command_${2:name}, \"${3:description}\");"
+    ],
+    "description": "RegConsoleCmd(\"sm_name\", callback, \"desc\")"
+  },
+  "cmd": {
+    "prefix": "cmd",
+    "body": [
+      "public Action ${1:cmd_name}(int client, int args)",
+      "{",
+      "\t$0",
+      "",
+      "\treturn Plugin_Handled;",
+      "}"
+    ],
+    "description": "public Action cmd(int client, int args) callback"
+  },
+  "rph": {
+    "prefix": "rph",
+    "body": [
+      "return Plugin_Handled;"
+    ],
+    "description": "return Plugin_Handled;"
+  },
+  "rpco": {
+    "prefix": "rpco",
+    "body": [
+      "return Plugin_Continue;"
+    ],
+    "description": "return Plugin_Continue;"
+  },
+  "rpch": {
+    "prefix": "rpch",
+    "body": [
+      "return Plugin_Changed;"
+    ],
+    "description": "return Plugin_Changed;"
+  },
+  "rps": {
+    "prefix": "rps",
+    "body": [
+      "return Plugin_Stop;"
+    ],
+    "description": "return Plugin_Stop;"
+  }
+}
