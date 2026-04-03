@@ -111,15 +111,19 @@ vim.api.nvim_create_autocmd('User', {
 vim.api.nvim_create_autocmd('FileType', {
   pattern = 'sourcepawn',
   callback = function(ev)
+    vim.bo[ev.buf].commentstring = '// %s'
+    vim.bo[ev.buf].comments = 's1:/*,mb:*,ex:*/,://'
+
+    local async = deploy.async
     local opts = function(desc) return { buffer = ev.buf, desc = desc } end
-    vim.keymap.set('n', '<leader>cc', deploy.compile, opts '[C]ompile current plugin')
-    vim.keymap.set('n', '<leader>cu', deploy.upload, opts '[U]pload current .smx')
-    vim.keymap.set('n', '<leader>cU', deploy.upload_all, opts '[U]pload all deployable files')
-    vim.keymap.set('n', '<leader>ca', deploy.compile_and_upload, opts 'Compile + Upload [A]ll')
-    vim.keymap.set('n', '<leader>cC', function() deploy.compile_all() end, opts '[C]ompile all .sp files')
-    vim.keymap.set('n', '<leader>cA', deploy.compile_all_and_upload, opts 'Compile [A]ll + upload all')
+    vim.keymap.set('n', '<leader>cc', async(deploy.compile), opts '[C]ompile current plugin')
+    vim.keymap.set('n', '<leader>cu', async(deploy.upload), opts '[U]pload current .smx')
+    vim.keymap.set('n', '<leader>cU', async(deploy.upload_all), opts '[U]pload all deployable files')
+    vim.keymap.set('n', '<leader>ca', async(deploy.compile_and_upload), opts 'Compile + Upload [A]ll')
+    vim.keymap.set('n', '<leader>cC', async(function() deploy.compile_all() end), opts '[C]ompile all .sp files')
+    vim.keymap.set('n', '<leader>cA', async(deploy.compile_all_and_upload), opts 'Compile [A]ll + upload all')
     vim.keymap.set('n', '<leader>cl', deploy.toggle_log, opts 'Toggle [L]og window')
-    vim.keymap.set('n', '<leader>ci', deploy.show_info, opts 'Show deploy [I]nfo')
+    vim.keymap.set('n', '<leader>ci', async(deploy.show_info), opts 'Show deploy [I]nfo')
     vim.keymap.set('n', '<leader>tsu', deploy.toggle_auto_upload, opts '[T]oggle [S]ourcemod [U]pload')
     vim.keymap.set('n', '<leader>tsr', deploy.toggle_auto_reload, opts '[T]oggle [S]ourcemod [R]eload')
     vim.keymap.set('n', '<leader>tsw', deploy.toggle_compile_on_save, opts '[T]oggle compile-on-[S]ave [W]rite')
@@ -130,6 +134,6 @@ vim.api.nvim_create_autocmd('FileType', {
 vim.api.nvim_create_autocmd('BufWritePost', {
   pattern = '*.sp',
   callback = function()
-    if deploy._compile_on_save then deploy.compile() end
+    if deploy._compile_on_save then deploy.async(deploy.compile)() end
   end,
 })
